@@ -1,15 +1,26 @@
 """Gradio Space demo for nano-cohere-transcribe.
 
-Works on:
-- ZeroGPU spaces (via the optional `spaces` import + @spaces.GPU decorator)
-- Paid GPU spaces (T4/A10G/A100) — same code, decorator becomes a no-op
+Designed to work on:
+- ZeroGPU spaces (via `import spaces` + @spaces.GPU decorator)
+- Paid GPU spaces (T4 / A10G / A100) — same code, decorator becomes a no-op
 - Local CPU/GPU (run `python app.py`)
 
-The model weights are gated. The Space needs an HF token in the Space's
-Settings → Secrets as `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) so
+The model weights are gated. The Space needs an HF token in its
+Settings → Variables and secrets as `HF_TOKEN` so
 ``huggingface_hub.snapshot_download`` can pull the checkpoint.
 """
 from __future__ import annotations
+
+# IMPORTANT: `import spaces` must come *before* any torch import — on ZeroGPU
+# it monkey-patches torch to lazily initialise CUDA inside @spaces.GPU
+# functions. If torch is imported first the patch is a no-op and the
+# ``torch.device("cuda")`` calls inside our loader will fail at module load.
+try:
+    import spaces  # noqa: F401
+
+    HAS_SPACES = True
+except ImportError:
+    HAS_SPACES = False
 
 import os
 import time
@@ -20,15 +31,6 @@ import torch
 from nano_cohere_transcribe import from_pretrained
 from nano_cohere_transcribe.audio import load_audio_16k_mono
 from nano_cohere_transcribe.tokenizer import SUPPORTED_LANGUAGES
-
-# Optional: hugging-face Spaces ZeroGPU integration. Falls back to a no-op
-# decorator if `spaces` is not installed (paid GPU / local).
-try:
-    import spaces  # noqa: F401
-
-    HAS_SPACES = True
-except ImportError:
-    HAS_SPACES = False
 
 
 LANGUAGE_NAMES: dict[str, str] = {
@@ -49,17 +51,29 @@ LANGUAGE_NAMES: dict[str, str] = {
 }
 
 MODEL_REPO = "CohereLabs/cohere-transcribe-03-2026"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Module-level cache. Loaded on first request so cold-start latency lands
-# on whoever clicks Transcribe first, not on the Space build.
+# On any HF Space we target cuda — ZeroGPU's shim defers actual device
+# allocation until we're inside @spaces.GPU. Locally, fall back to whatever
+# the user has.
+if HAS_SPACES or torch.cuda.is_available():
+    DEVICE = "cuda"
+else:
+    DEVICE = "cpu"
+
+# Module-level cache. Populated on first request inside the GPU context.
 _model = None
 
 
 def _ensure_model():
+    """Lazily load the model on first call.
+
+    On ZeroGPU this must run inside an @spaces.GPU function so CUDA is
+    available; module-level CUDA allocations would fail. Globals persist
+    between requests so subsequent calls reuse the loaded weights.
+    """
     global _model
     if _model is None:
-        _model = from_pretrained(MODEL_REPO, device=DEVICE, warmup=True)
+        _model = from_pretrained(MODEL_REPO, device=DEVICE, warmup=False)
     return _model
 
 
@@ -77,7 +91,7 @@ def _transcribe(audio_path, language, punctuation, batch_size):
         punctuation=punctuation,
         batch_size=int(batch_size),
     )
-    if DEVICE == "cuda":
+    if torch.cuda.is_available():
         torch.cuda.synchronize()
     dt = time.perf_counter() - t0
 
@@ -90,7 +104,8 @@ def _transcribe(audio_path, language, punctuation, batch_size):
     return text, info
 
 
-# Decorate with @spaces.GPU on ZeroGPU; transparent no-op elsewhere.
+# 180 s ZeroGPU slot covers cold-load (~3 s) + warmup + transcription of
+# clips up to a few minutes. Longer clips would need a longer slot.
 if HAS_SPACES:
     transcribe = spaces.GPU(_transcribe, duration=180)
 else:
@@ -108,9 +123,7 @@ with gr.Blocks(title="nano-cohere-transcribe") as demo:
         — 14 languages, energy-based chunking for long audio, CUDA-graph
         decoder for low-latency streaming.
 
-        - Code: [github.com/Deep-unlearning/nano-cohere-transcribe](https://github.com/Deep-unlearning/nano-cohere-transcribe)
-        - The model weights are gated; the Space owner must accept the license
-          and set `HF_TOKEN` as a Space secret.
+        Code: [github.com/Deep-unlearning/nano-cohere-transcribe](https://github.com/Deep-unlearning/nano-cohere-transcribe)
         """
     )
 
