@@ -10,9 +10,19 @@ import torch
 
 
 def convert_to_wav16k(path: str) -> str:
-    """Transcode any ffmpeg-readable audio to a 16 kHz mono WAV temp file."""
+    """Transcode any ffmpeg-readable audio to a 16 kHz mono WAV temp file.
+
+    Skips the transcode only if the input is already a 16 kHz mono WAV —
+    a `.wav` extension alone is not enough (a 24 kHz stereo wav must still
+    be resampled).
+    """
     if path.lower().endswith(".wav"):
-        return path
+        try:
+            info = sf.info(path)
+            if info.samplerate == 16000 and info.channels == 1:
+                return path
+        except Exception:
+            pass  # unreadable header → fall through to ffmpeg
     out = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     out.close()
     subprocess.check_call(
@@ -35,13 +45,5 @@ def load_audio_16k_mono(path: str) -> torch.Tensor:
     """Read any audio file and return a 1-D float32 torch tensor at 16 kHz mono."""
     wav_path = convert_to_wav16k(path)
     audio, sr = load_audio(wav_path)
-    if sr != 16000:
-        try:
-            import librosa
-        except ImportError as e:
-            raise RuntimeError(
-                f"Got sample rate {sr} but librosa not installed; "
-                "`pip install librosa` or let ffmpeg resample first."
-            ) from e
-        audio = librosa.resample(audio, orig_sr=sr, target_sr=16000).astype(np.float32)
+    assert sr == 16000, f"convert_to_wav16k produced sr={sr}"
     return torch.from_numpy(audio)
