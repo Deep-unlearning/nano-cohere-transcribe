@@ -74,11 +74,17 @@ def greedy_generate(
     # --- Step loop ---
     # CUDA graph the per-step decoder if we're on a GPU and not in fp32 (graph
     # capture works with fp32 too, but we don't keep a cuBLAS-fp32-warm path).
+    # Skip graphs at large B: each new (B, T_enc) triggers a fresh capture
+    # (~100-500 ms). At big batches the per-step launch overhead is already
+    # amortized across the batch, so the capture cost outweighs the win
+    # — measured on earnings22 short-form bs=64 (25.2 s -> 26.7 s with graphs).
+    GRAPH_MAX_BATCH = 16
     use_graph = (
         use_cuda_graph
         and device.type == "cuda"
         and dtype != torch.float32
         and max_new_tokens > 1
+        and B <= GRAPH_MAX_BATCH
     )
     graph = None
     if use_graph:
