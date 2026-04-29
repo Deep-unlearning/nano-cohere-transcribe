@@ -14,6 +14,7 @@ from typing import Optional
 
 import torch
 
+from ._graph import get_or_build_graph
 from .tokenizer import SUPPORTED_LANGUAGES, CohereTokenizer
 
 
@@ -26,6 +27,7 @@ def greedy_generate(
     punctuation: bool = True,
     max_new_tokens: int = 256,
     tokenizer: Optional[CohereTokenizer] = None,
+    use_cuda_graph: bool = True,
 ) -> list[list[int]]:
     """Greedy decode; returns per-row token id lists with prompt and trailing EOS stripped."""
     if tokenizer is None:
@@ -70,22 +72,41 @@ def greedy_generate(
     finished |= next_token == eos_id
 
     # --- Step loop ---
+    # CUDA graph the per-step decoder if we're on a GPU and not in fp32 (graph
+    # capture works with fp32 too, but we don't keep a cuBLAS-fp32-warm path).
+    use_graph = (
+        use_cuda_graph
+        and device.type == "cuda"
+        and dtype != torch.float32
+        and max_new_tokens > 1
+    )
+    graph = None
+    if use_graph:
+        # Buffer must hold prompt + generated tokens. +8 slack for safety.
+        max_kv = prompt.size(1) + max_new_tokens + 8
+        graph = get_or_build_graph(model, B=B, T_enc=enc_T, max_kv=max_kv)
+        graph.load_prefill(self_caches, cross_caches, cross_mask)
+
     step = 1
     past_len = prompt.size(1)
     while step < max_new_tokens and not finished.all():
-        tok = next_token.unsqueeze(1)  # [B, 1]
-        pos = torch.full((B, 1), past_len, dtype=torch.long, device=device)
-        h, self_caches, _ = _decoder_forward(
-            model,
-            input_ids=tok,
-            positions=pos,
-            encoder_hidden_states=encoder_hidden_states,
-            cross_mask=cross_mask,
-            self_caches=self_caches,
-            cross_caches=cross_caches,
-            use_causal_self_mask=False,
-        )
-        next_token = model.log_softmax(h[:, -1:, :]).squeeze(1).argmax(dim=-1)
+        if graph is not None:
+            logits = graph.step(next_token, past_len)
+            next_token = logits.argmax(dim=-1)
+        else:
+            tok = next_token.unsqueeze(1)  # [B, 1]
+            pos = torch.full((B, 1), past_len, dtype=torch.long, device=device)
+            h, self_caches, _ = _decoder_forward(
+                model,
+                input_ids=tok,
+                positions=pos,
+                encoder_hidden_states=encoder_hidden_states,
+                cross_mask=cross_mask,
+                self_caches=self_caches,
+                cross_caches=cross_caches,
+                use_causal_self_mask=False,
+            )
+            next_token = model.log_softmax(h[:, -1:, :]).squeeze(1).argmax(dim=-1)
         # After EOS, keep writing EOS for rows that finished so we don't overwrite.
         next_token = torch.where(finished, torch.full_like(next_token, eos_id), next_token)
         generated[:, step] = next_token

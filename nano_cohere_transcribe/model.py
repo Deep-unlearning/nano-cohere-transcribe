@@ -624,6 +624,24 @@ class CohereAsr(nn.Module):
     # ---- High-level helpers ----
 
     @torch.no_grad()
+    def warmup(self, duration_s: float = 1.0, batch_size: int = 1) -> None:
+        """Run a dummy transcription so first real call doesn't pay graph capture cost.
+
+        Pre-builds the CUDA graph for ``batch_size`` and the encoder output
+        length corresponding to ``duration_s`` of audio. Subsequent calls
+        with the same ``(B, T_enc)`` reuse the cached graph for free.
+        """
+        device = next(self.parameters()).device
+        if device.type != "cuda":
+            return
+        n = int(self.config.sample_rate * duration_s)
+        wavs = [torch.zeros(n, dtype=torch.float32, device=device) for _ in range(batch_size)]
+        if batch_size == 1:
+            self.transcribe(wavs[0], language="en", max_new_tokens=2)
+        else:
+            self.transcribe_batch(wavs, language="en", max_new_tokens=2, batch_size=batch_size)
+
+    @torch.no_grad()
     def compute_features(self, waveform: torch.Tensor):
         """Return ``(mel_features, frame_lengths)`` for a mono waveform.
 
