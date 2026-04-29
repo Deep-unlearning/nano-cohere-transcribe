@@ -8,15 +8,33 @@ version = "0.1.0"
 description = "Pure-PyTorch inference for CohereLabs/cohere-transcribe-03-2026 (no transformers)."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Steven" }]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+keywords = [
+    "asr",
+    "speech-recognition",
+    "cohere",
+    "conformer",
+    "pytorch",
+    "transcription",
+    "inference",
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
 dependencies = [
     "torch",
     "numpy",
@@ -25,6 +43,12 @@ dependencies = [
     "huggingface-hub",
     "safetensors",
 ]
+
+[project.urls]
+Homepage     = "https://github.com/Deep-unlearning/nano-cohere-transcribe"
+Repository   = "https://github.com/Deep-unlearning/nano-cohere-transcribe"
+Issues       = "https://github.com/Deep-unlearning/nano-cohere-transcribe/issues"
+"Model Card" = "https://huggingface.co/CohereLabs/cohere-transcribe-03-2026"
 
 [project.scripts]
 nano-cohere-transcribe = "nano_cohere_transcribe.__main__:main"
